@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: ./test.sh
+      - name: Build
+        run: ./build.sh
+      - name: Verify app signature
+        run: codesign --verify --deep --strict --verbose=2 build/Slot.app
