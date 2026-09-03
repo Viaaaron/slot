@@ -10,6 +10,7 @@ final class SlotController {
     private var runLoopSource: CFRunLoopSource?
     private var pollingTimer: Timer?
     private var restoreWorkItem: DispatchWorkItem?
+    private var externalCaptureWorkItems: [DispatchWorkItem] = []
 
     private(set) var cycleIndex: Int?
     private var cycleApplicationPID: pid_t?
@@ -84,6 +85,11 @@ final class SlotController {
         let isPlainCommandV = keyCode == 9 && relevantModifiers == .maskCommand
 
         if isPlainCommandV {
+            if isWisprFlowPasteEvent(event) {
+                passThroughWisprFlowPaste()
+                return false
+            }
+
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
             if !isRepeat { cyclePaste() }
             return true
@@ -124,7 +130,49 @@ final class SlotController {
         statusHandler?()
     }
 
-    private func endCycle() {
+    private func passThroughWisprFlowPaste() {
+        restoreWorkItem?.cancel()
+        restoreWorkItem = nil
+        endCycle(restoreTopSlot: false)
+        captureExternalClipboardSoon(reason: "Wispr Flow paste")
+        Diagnostics.log("Passing through Wispr Flow Command-V event")
+    }
+
+    private func captureExternalClipboardSoon(reason: String) {
+        externalCaptureWorkItems.forEach { $0.cancel() }
+        externalCaptureWorkItems.removeAll()
+
+        let delays: [TimeInterval] = [0.0, 0.03, 0.12, 0.35]
+        for delay in delays {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                if self.ring.captureCurrentIfChanged() {
+                    Diagnostics.log("Captured clipboard after \(reason)")
+                }
+            }
+            externalCaptureWorkItems.append(work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+    }
+
+    private func isWisprFlowPasteEvent(_ event: CGEvent) -> Bool {
+        let sourcePID = pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))
+        guard sourcePID > 0, sourcePID != getpid(),
+              let sourceApplication = NSRunningApplication(processIdentifier: sourcePID) else {
+            return false
+        }
+
+        let searchableIdentifiers = [
+            sourceApplication.localizedName,
+            sourceApplication.bundleIdentifier,
+            sourceApplication.executableURL?.lastPathComponent
+        ]
+        return searchableIdentifiers.contains { value in
+            value?.range(of: "wispr", options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    private func endCycle(restoreTopSlot: Bool = true) {
         guard cycleIndex != nil else { return }
         cycleIndex = nil
         cycleApplicationPID = nil
@@ -132,6 +180,9 @@ final class SlotController {
         statusHandler?()
 
         restoreWorkItem?.cancel()
+        restoreWorkItem = nil
+        guard restoreTopSlot else { return }
+
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             _ = self.ring.writeEntry(at: 0)

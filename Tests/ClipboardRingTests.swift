@@ -12,7 +12,9 @@ struct ClipboardRingTests {
 
         func copy(_ value: String) {
             testPasteboard.clearContents()
-            precondition(testPasteboard.setString(value, forType: .string))
+            let item = NSPasteboardItem()
+            precondition(item.setString(value, forType: .string))
+            precondition(testPasteboard.writeObjects([item]))
             precondition(ring.captureCurrentIfChanged())
         }
 
